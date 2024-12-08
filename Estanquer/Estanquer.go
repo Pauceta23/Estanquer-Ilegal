@@ -162,7 +162,7 @@ func main() {
 	//Simulació de replegació de les taules (cues)
 	for i := 0; i < 3; i++ {
 		fmt.Print(". ")
-		time.Sleep(750 * time.Millisecond)
+		time.Sleep(time.Second)
 	}
 	//Esborrament de les cues com es demana
 	ch.QueueDelete(qP.Name, false, false, false)
