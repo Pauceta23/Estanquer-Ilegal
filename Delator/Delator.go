@@ -2,11 +2,12 @@ package main
 
 import (
 	"fmt"
-	"os"
+	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
+// Funció bàsica per detectar errors
 func checkError(err error) {
 	if err != nil {
 		fmt.Println(err)
@@ -14,18 +15,21 @@ func checkError(err error) {
 	}
 }
 
+// Funció bàsica per conectarse al servidor de rabbitmq
 func conectarServidor() *amqp.Connection {
 	conn, err := amqp.Dial("amqp://guest:guest@localhost:5672/")
 	checkError(err)
 	return conn
 }
 
+// Funció per obrir un canal al servidor de rabbitmq
 func obrirCanal(conn *amqp.Connection) *amqp.Channel {
 	ch, err := conn.Channel()
 	checkError(err)
 	return ch
 }
 
+// Funció per crear/unirse a la cua on els fumadors demanen tabac o mistos
 func declararCuaPeticions(ch *amqp.Channel) amqp.Queue {
 	q, err := ch.QueueDeclare(
 		"Peticions", // name
@@ -36,11 +40,10 @@ func declararCuaPeticions(ch *amqp.Channel) amqp.Queue {
 		nil,         // arguments
 	)
 	checkError(err)
-	//ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	//defer cancel()
 	return q
 }
 
+// Funció per crear/unirse a la cua on l'estanquer deixa el tabac
 func declararCuaTabac(ch *amqp.Channel) amqp.Queue {
 	q, err := ch.QueueDeclare(
 		"taulaTabac", // name
@@ -51,11 +54,10 @@ func declararCuaTabac(ch *amqp.Channel) amqp.Queue {
 		nil,          // arguments
 	)
 	checkError(err)
-	//ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	//defer cancel()
 	return q
 }
 
+// Funció per crear/unirse a la cua on l'estanquer deixa els mistos
 func declararCuaMistos(ch *amqp.Channel) amqp.Queue {
 	q, err := ch.QueueDeclare(
 		"taulaMistos", // name
@@ -66,11 +68,10 @@ func declararCuaMistos(ch *amqp.Channel) amqp.Queue {
 		nil,           // arguments
 	)
 	checkError(err)
-	//ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	//defer cancel()
 	return q
 }
 
+// Cream el exchange de tipus fanout per fer un "broadcast"
 func crearExchange(ch *amqp.Channel) {
 	err := ch.ExchangeDeclare(
 		"avisar", // name
@@ -85,33 +86,21 @@ func crearExchange(ch *amqp.Channel) {
 	checkError(err)
 }
 
+// Unim cada cua al exchange per que el missatge broadcast arribi
 func enganxarCuesExchange(ch *amqp.Channel, noms [3]string) {
-	err := ch.QueueBind(
-		noms[0],  // queue name
-		"",       // routing key
-		"avisar", // exchange
-		false,
-		nil,
-	)
-	checkError(err)
-	err = ch.QueueBind(
-		noms[1],  // queue name
-		"",       // routing key
-		"avisar", // exchange
-		false,
-		nil,
-	)
-	checkError(err)
-	err = ch.QueueBind(
-		noms[2],  // queue name
-		"",       // routing key
-		"avisar", // exchange
-		false,
-		nil,
-	)
-	checkError(err)
+	for _, nom := range noms {
+		err := ch.QueueBind(
+			nom,      // queue name
+			"",       // routing key
+			"avisar", // exchange
+			false,
+			nil,
+		)
+		checkError(err)
+	}
 }
 
+// Funció per enviar el missatge broadcast de la policia al exchange
 func avisarPolicia(ch *amqp.Channel) {
 	body := "policia"
 	err := ch.Publish(
@@ -127,16 +116,24 @@ func avisarPolicia(ch *amqp.Channel) {
 }
 
 func main() {
+	//Gestió de rabbitmq
 	conn := conectarServidor()
 	defer conn.Close()
 	ch := obrirCanal(conn)
 	defer ch.Close()
+	qP := declararCuaPeticions(ch) //Declarar les cues no és necessari
+	qT := declararCuaTabac(ch)     //però és per evitar errors si es vol
+	qM := declararCuaMistos(ch)    //executar el Delator el primer de tots
 	crearExchange(ch)
-	enganxarCuesExchange(ch, [3]string{"Peticions", "taulaTabac", "taulaMistos"})
+	enganxarCuesExchange(ch, [3]string{qP.Name, qT.Name, qM.Name})
 
-	//time.Sleep(10 * time.Second)
-	fmt.Print("No sóm fumador. ALERTA! Que ve la policia!\n")
+	//Feim una espera llarga i després avisam a la policia
+	time.Sleep(10 * time.Second)
+	fmt.Print("No sóm fumador. ALERTA! Que ve la policia!\n\n")
 	avisarPolicia(ch)
-	//desactivar todos los procesos
-	os.Exit(0)
+	for i := 0; i < 3; i++ {
+		fmt.Print(". ")
+		time.Sleep(500 * time.Millisecond)
+	}
+	fmt.Print("\n")
 }

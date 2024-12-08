@@ -9,6 +9,7 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
+// Funció bàsica per detectar errors
 func checkError(err error) {
 	if err != nil {
 		fmt.Println(err)
@@ -16,18 +17,21 @@ func checkError(err error) {
 	}
 }
 
+// Funció bàsica per conectarse al servidor de rabbitmq
 func conectarServidor() *amqp.Connection {
 	conn, err := amqp.Dial("amqp://guest:guest@localhost:5672/")
 	checkError(err)
 	return conn
 }
 
+// Funció per obrir un canal al servidor de rabbitmq
 func obrirCanal(conn *amqp.Connection) *amqp.Channel {
 	ch, err := conn.Channel()
 	checkError(err)
 	return ch
 }
 
+// Funció per crear/unirse a la cua on els fumadors demanen tabac o mistos
 func declararCuaPeticions(ch *amqp.Channel) amqp.Queue {
 	q, err := ch.QueueDeclare(
 		"Peticions", // name
@@ -38,11 +42,10 @@ func declararCuaPeticions(ch *amqp.Channel) amqp.Queue {
 		nil,         // arguments
 	)
 	checkError(err)
-	//ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	//defer cancel()
 	return q
 }
 
+// Funció per crear/unirse a la cua on l'estanquer deixa el tabac
 func declararCuaTabac(ch *amqp.Channel) amqp.Queue {
 	q, err := ch.QueueDeclare(
 		"taulaTabac", // name
@@ -53,11 +56,10 @@ func declararCuaTabac(ch *amqp.Channel) amqp.Queue {
 		nil,          // arguments
 	)
 	checkError(err)
-	//ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	//defer cancel()
 	return q
 }
 
+// Funció per crear/unirse a la cua on l'estanquer deixa els mistos
 func declararCuaMistos(ch *amqp.Channel) amqp.Queue {
 	q, err := ch.QueueDeclare(
 		"taulaMistos", // name
@@ -68,11 +70,10 @@ func declararCuaMistos(ch *amqp.Channel) amqp.Queue {
 		nil,           // arguments
 	)
 	checkError(err)
-	//ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	//defer cancel()
 	return q
 }
 
+// Funció per publicar un n tabac a la cua de tabacs
 func publicarTabac(ch *amqp.Channel, nom string, ntabacs int) {
 	body := fmt.Sprintf("tabac %d", ntabacs)
 	err := ch.Publish(
@@ -88,6 +89,7 @@ func publicarTabac(ch *amqp.Channel, nom string, ntabacs int) {
 	checkError(err)
 }
 
+// Funció per publicar un n misto a la cua de mistos
 func publicarMistos(ch *amqp.Channel, nom string, nmistos int) {
 	body := fmt.Sprintf("misto %d", nmistos)
 	err := ch.Publish(
@@ -102,6 +104,7 @@ func publicarMistos(ch *amqp.Channel, nom string, nmistos int) {
 	checkError(err)
 }
 
+// Funció per rebre les peticions que fan els fumadors
 func peticions(ch *amqp.Channel, nom string) <-chan amqp.Delivery {
 	msgs, err := ch.Consume(
 		nom,   // queue
@@ -117,45 +120,53 @@ func peticions(ch *amqp.Channel, nom string) <-chan amqp.Delivery {
 }
 
 func main() {
-	var wg sync.WaitGroup
-	wg.Add(1)
 	fmt.Print("Hola, som l'estanquer il·legal\n\n")
 
+	var wg sync.WaitGroup //Variable per sincronizar el fil main i el fil fill
+	wg.Add(1)             //Afegim el fil que s'executarà
+
+	//Feim tota la gestió de rabbitmq
 	conn := conectarServidor()
 	defer conn.Close()
 	ch := obrirCanal(conn)
 	defer ch.Close()
-	q := declararCuaPeticions(ch)
-	q1 := declararCuaTabac(ch)
-	q2 := declararCuaMistos(ch)
-	msgs := peticions(ch, q.Name)
+	qP := declararCuaPeticions(ch)
+	qT := declararCuaTabac(ch)
+	qM := declararCuaMistos(ch)
+	msgs := peticions(ch, qP.Name)
 
 	go func() {
-		ntabacs, nmistos := 0, 0
-		for d := range msgs {
-			if bytes.Equal(d.Body, []byte("policia")) {
+		ntabacs, nmistos := 0, 0 //Comptador de tabac i mistos per identificar-los
+		for d := range msgs {    //Per cada missatge
+			if bytes.Equal(d.Body, []byte("policia")) { //Si és la policia, sortim
+				fmt.Print("Uyuyuy la policia! Men vaig\n")
 				break
 			}
-			//Si piden tabaco, si no si piden mistos:
+			//Si demanen tabac, si no si demanen mistos:
 			if bytes.Equal(d.Body, []byte("tabac")) {
 				ntabacs++
-				publicarTabac(ch, q1.Name, ntabacs)
+				publicarTabac(ch, qT.Name, ntabacs)
 				fmt.Println("He posat el tabac", ntabacs, "damunt la taula")
 
 			} else if bytes.Equal(d.Body, []byte("misto")) {
 				nmistos++
-				publicarMistos(ch, q2.Name, nmistos)
+				publicarMistos(ch, qM.Name, nmistos)
 				fmt.Println("He posat el misto", nmistos, "damunt la taula")
 
 			}
 		}
-		wg.Done()
+		wg.Done() //Avisam que ja hem acabat
 	}()
-	wg.Wait()
-	fmt.Print("Uyuyuy la policia! Men vaig\n")
+	wg.Wait() //Espera fins que no hagui acabat la rutina de go
+
+	//Simulació de replegació de les taules (cues)
 	for i := 0; i < 3; i++ {
 		fmt.Print(". ")
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(750 * time.Millisecond)
 	}
+	//Esborrament de les cues com es demana
+	ch.QueueDelete(qP.Name, false, false, false)
+	ch.QueueDelete(qT.Name, false, false, false)
+	ch.QueueDelete(qM.Name, false, false, false)
 	fmt.Print("Men duc la taula!!!!\n")
 }

@@ -9,6 +9,7 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
+// Funció bàsica per detectar errors
 func checkError(err error) {
 	if err != nil {
 		fmt.Println(err)
@@ -16,18 +17,21 @@ func checkError(err error) {
 	}
 }
 
+// Funció bàsica per conectarse al servidor de rabbitmq
 func conectarServidor() *amqp.Connection {
 	conn, err := amqp.Dial("amqp://guest:guest@localhost:5672/")
 	checkError(err)
 	return conn
 }
 
+// Funció per obrir un canal al servidor de rabbitmq
 func obrirCanal(conn *amqp.Connection) *amqp.Channel {
 	ch, err := conn.Channel()
 	checkError(err)
 	return ch
 }
 
+// Funció per crear/unirse a la cua on es demanaran mistos
 func declararCuaPeticions(ch *amqp.Channel) amqp.Queue {
 	q, err := ch.QueueDeclare(
 		"Peticions", // name
@@ -38,11 +42,10 @@ func declararCuaPeticions(ch *amqp.Channel) amqp.Queue {
 		nil,         // arguments
 	)
 	checkError(err)
-	//ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	//defer cancel()
 	return q
 }
 
+// Funció per crear/unirse a la cua on es recolliran els mistos
 func declararCuaMistos(ch *amqp.Channel) amqp.Queue {
 	q, err := ch.QueueDeclare(
 		"taulaMistos", // name
@@ -53,18 +56,17 @@ func declararCuaMistos(ch *amqp.Channel) amqp.Queue {
 		nil,           // arguments
 	)
 	checkError(err)
-	//ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	//defer cancel()
 	return q
 }
 
+// Funció per crear/unirse a la cua on es recolliran els mistos
 func enregistrarConsumidor(ch *amqp.Channel, nom string) <-chan amqp.Delivery {
 	msgs, err := ch.Consume(
 		nom,   // queue
 		"",    // consumer
-		true,  // auto-ack
-		false, // exclusive
-		false, // no-local
+		false, // auto-ack		Veure que auto-ack està a fals per a que
+		false, // exclusive		no s'esborri el missatge de policia i la
+		false, // no-local		resta de fumadors el puguin veure
 		false, // no-wait
 		nil,   // args
 	)
@@ -72,6 +74,7 @@ func enregistrarConsumidor(ch *amqp.Channel, nom string) <-chan amqp.Delivery {
 	return msgs
 }
 
+// Funció per demanar un misto
 func demanarMistos(ch *amqp.Channel, nom string) {
 	body := "misto"
 	err := ch.Publish(
@@ -87,9 +90,12 @@ func demanarMistos(ch *amqp.Channel, nom string) {
 }
 
 func main() {
-	var wg sync.WaitGroup
-	wg.Add(1)
 	fmt.Print("Sóm fumador. Tinc tabac però me falten mistos\n")
+
+	var wg sync.WaitGroup //Variable per sincronizar el fil main i el fil fill
+	wg.Add(1)             //Afegim el fil que s'executarà
+
+	//Gestió del rabbitmq
 	conn := conectarServidor()
 	defer conn.Close()
 	ch := obrirCanal(conn)
@@ -98,25 +104,25 @@ func main() {
 	q2 := declararCuaPeticions(ch)
 	msgs := enregistrarConsumidor(ch, q1.Name)
 
-	demanarMistos(ch, q2.Name)
 	go func() {
-
+		demanarMistos(ch, q2.Name) //Feim la primera petició
 		for d := range msgs {
 			if bytes.Equal(d.Body, []byte("policia")) {
-				break
+				break //Si es la policia sortim
 			}
-			//if bytes.Equal(d.Body, []byte("tabac 3")) {
+			//Si no es policia, es un misto
+			d.Ack(false) //Feim el ack per esborrar el missatge de la cua
 			fmt.Printf("He agafat el %s. Gràcies!\n", d.Body)
-			for i := 0; i < 3; i++ {
+			for i := 0; i < 3; i++ { //Espera
 				fmt.Print(". ")
 				time.Sleep(500 * time.Millisecond)
 			}
+			//Demanar un altre misto i repetir procés
 			fmt.Print("\nMe dones un altre misto?\n")
 			demanarMistos(ch, q2.Name)
 		}
-		wg.Done()
+		wg.Done() //Avisam que ja hem acabat
 	}()
-
-	wg.Wait()
+	wg.Wait() //Esperam i una vegada terminat ens anam
 	fmt.Print("Anem que ve la policia!\n")
 }
